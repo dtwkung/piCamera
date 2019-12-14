@@ -14,9 +14,9 @@ def index():
     return render_template('index.html')
 
 
-def gen(camera):
+def gen(detector):
     while True:
-        frame = camera.getFrame()
+        frame = detector.getFrame()
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 

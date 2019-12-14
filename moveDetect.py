@@ -5,7 +5,7 @@ import time
 
 
 class moveDetect:
-    def __init__(self, model = 'yolo'):
+    def __init__(self, model='yolo'):
         # start video camera
         self.vs = cv.VideoCapture(0)
         if not self.vs.isOpened():
@@ -33,7 +33,7 @@ class moveDetect:
         diff = cv.absdiff(self.f1, self.f2)
         gray = cv.cvtColor(diff, cv.COLOR_BGR2GRAY)
         gray = cv.GaussianBlur(gray, (3, 3), 0)
-        gray = cv.threshold(gray, 20, 255, cv.THRESH_BINARY)[1]
+        gray = cv.threshold(gray, 30, 255, cv.THRESH_BINARY)[1]
         dilated = cv.dilate(gray, np.ones((7, 7)), iterations=3)
         contours, _ = cv.findContours(dilated, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
 
@@ -47,14 +47,20 @@ class moveDetect:
                 continue
             (x, y, w, h) = cv.boundingRect(contour)
             movements.append((x, y, x+w, y+h))
-        img = self.f2
+        img = np.copy(self.f2)
         #Show the largest movement ROI
-        if len(movements)>0:
+        if len(movements) > 0:
             for movement in movements:
                 x, y, w, h = movement
                 mover = img[y:h, x:w]
-                className = self.model.classPredict(mover)
-            cv.rectangle(self.f2, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                prediction = self.model.predict(mover)
+                if prediction is not None:
+                    box, label, confidence = prediction
+                    x1, y1, w1, h1 = box.astype(int)
+                    cv.rectangle(img, (x + x1, y + y1), (x + x1 + w, y + y1 + + h), (0, 255, 0), 2)
+                    cv.putText(img, label + ": " + str(np.round(confidence,2)), (x + x1, y + y1 - 5),
+                               cv.FONT_HERSHEY_DUPLEX, 0.5, (0, 255, 255), 1)
+            #cv.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
         self.f1 = self.f2
 
@@ -62,6 +68,7 @@ class moveDetect:
 
 
         jpeg = cv.imencode('.jpg', img)[1]
+        time.sleep(0.5)
         return jpeg.tobytes()
 
     def __del__(self):
@@ -98,7 +105,6 @@ class mobilenet:
     def predict(self, img):
         # set scaling factors
         y_factor, x_factor = img.shape[:-1]
-
         #perform prediction
         start = time.time()
         blob = cv.dnn.blobFromImage(img, size = (300,300), swapRB=True, crop=False)
@@ -118,16 +124,32 @@ class mobilenet:
 
         #Draw the bounding boxes onto the image
         if len(labels) > 0:
-            print(boxes.shape)
-            for label, box, confidence in zip(labels, boxes[0], confidences):
-                x, y, w, h = box.astype(int)
-                y-=80
-                h-=80
-                cv.rectangle(img, (x, y), (w, h), (0, 255, 0), 2)
-                cv.putText(img, label + ": " + str(confidence), (x, y-5), cv.FONT_HERSHEY_DUPLEX, 0.5, (0, 255, 255), 1)
-        print("Mobilenet v3 time taken:", time.time()-start)
+            # mostConfident = np.argmax(confidences)
+            # print("most confident", confidences[mostConfident], "label is", labels[mostConfident])
+            #
+            #
+            # print("largest box is", labels[largestBox])
 
-        return img
+            # Only return the largest identified object
+            boxSize = (boxes[0, :, 2] - boxes[0, :, 0]) * (boxes[0, :, 3] - boxes[0, :, 1])
+            largestBox = np.argmax(boxSize)
+            # print(largestBox)
+            # print(boxes.shape)
+            box = boxes[0][largestBox].astype(int)
+            label = labels[largestBox]
+            confidence = confidences[largestBox]
+
+            # for label, box, confidence in zip(labels, boxes[0], confidences):
+            #     x, y, w, h = box.astype(int)
+            #     #y-=80
+            #     # h-=80
+            #     cv.rectangle(img, (x, y), (w, h), (0, 255, 0), 2)
+            #     cv.putText(img, label + ": " + str(confidence), (x, y-5), cv.FONT_HERSHEY_DUPLEX, 0.5, (0, 255, 255), 1)
+            print("Mobilenet v3 time taken:", time.time()-start)
+
+            return (box, label, confidence)
+        print("Mobilenet v3 time taken:", time.time() - start)
+        return None
 
 
 class yolo:
@@ -161,7 +183,7 @@ class yolo:
         (y_factor, x_factor) = img.shape[:2]
 
         # perform prediction
-        # start = time.time()
+        start = time.time()
         # blob = cv.dnn.blobFromImage(cv.resize(image_org, (300, 300)), size = (300, 300), swapRB=True)
         blob = cv.dnn.blobFromImage(img, 1 / 255.0, self.size, swapRB=True, crop=False)
         self.model.setInput(blob)
@@ -187,14 +209,22 @@ class yolo:
                     boxes.append([x, y, int(w), int(h)])
                     confidences.append(float(confidence))
                     classIDs.append(classID)
+        # non-maximal suppression
+        idxs = cv.dnn.NMSBoxes(boxes, confidences, 0.5, 0.8, top_k=1)
 
-        idxs = cv.dnn.NMSBoxes(boxes, confidences, 0.5, 0.8)
         if len(idxs) > 0:
-            for i in idxs.flatten():
-                x, y, w, h = boxes[i]
-                cv.rectangle(img, (x, y), (w, h), (0, 255, 0), 2)
-                cv.putText(img, self.labels.get(classIDs[i]) + ": " + str(round(confidences[i], 2)), (x, y - 5),
-                           cv.FONT_HERSHEY_DUPLEX, 0.5, (255, 52, 64), 1)
-        # print("yolov3 time taken:", time.time() - start)
+            i = idxs.flatten()[0]
+            print("yolov3 time taken:", time.time() - start)
+            return (np.array(boxes[i]), self.labels.get(classIDs[i]), confidences[i])
+            # for i in idxs.flatten():
+            #     x, y, w, h = boxes[i]
+            #     cv.rectangle(img, (x, y), (w, h), (0, 255, 0), 2)
+            #     cv.putText(img, self.labels.get(classIDs[i]) + ": " + str(round(confidences[i], 2)), (x, y - 5),
+            #                cv.FONT_HERSHEY_DUPLEX, 0.5, (255, 52, 64), 1)
+        print("yolov3 time taken:", time.time() - start)
 
-        return img
+        return None
+#detector = moveDetect(model='mobilenet')
+
+# while(1):
+#     detector.getFrame()
