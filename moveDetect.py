@@ -10,12 +10,10 @@ class moveDetect:
         self.vs = cv.VideoCapture(0)
         if not self.vs.isOpened():
             raise RuntimeError('Could not start camera.')
-        self.f1 = self.vs.read()[1]
+        self.f1 = None
         self.f2 = None
-
-        # Set the count for number of cycles the reference image gets updated
-        self.UPDATE_CYCLE = 10
-        self.cnt = 0
+        self.output = None
+        self.newFrame = False
 
 
 
@@ -29,6 +27,10 @@ class moveDetect:
             return
 
     def getFrame(self):
+
+        if self.f1 is None:
+            self.f1 = self.vs.read()[1]
+            time.sleep(0.05)
         self.f2 = self.vs.read()[1]
         diff = cv.absdiff(self.f1, self.f2)
         gray = cv.cvtColor(diff, cv.COLOR_BGR2GRAY)
@@ -68,8 +70,15 @@ class moveDetect:
 
 
         jpeg = cv.imencode('.jpg', img)[1]
-        time.sleep(0.5)
+        #time.sleep(0.5)
         return jpeg.tobytes()
+
+
+    def startVideo(self):
+        while True:
+            self.output = self.getFrame()
+            self.newFrame = True
+            #print("New frame")
 
     def __del__(self):
         self.vs.release()
